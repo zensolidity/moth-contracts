@@ -250,19 +250,49 @@ contract MotthStaking is IERC20Staking {
 
     function claimableTokens(uint256 _stakingId, address account) public override view returns (uint256) {
         uint256 _canClaim = 0;
-        
+        bool isDoubleBoost = isDoubleBoostActive(account);
+
         for (uint256 i = 0; i < stakes[_stakingId][account].length; i++) {
             Staking storage _staking = stakes[_stakingId][account][i];
             uint256 cumulativeAPR = _staking.apr.add(getBoostedAPR(msg.sender));
             
-            _canClaim = _canClaim.add(
-                _staking.amount
-                    .mul(block.timestamp - _staking.stakeAt)
-                    .div(periodicTime)
-                    .mul(cumulativeAPR)
-                    .div(1000)
-            );
-            
+             if(isDoubleBoost) {
+                    if(_staking.stakeAt - block.timestamp >= 30 days) {
+                        _canClaim = _canClaim.add(
+                            _staking.amount
+                                .mul(30 days)
+                                .div(periodicTime)
+                                .mul(cumulativeAPR)
+                                .mul(2)
+                                .div(1000)
+                        );
+
+                        _canClaim = _canClaim.add(
+                            _staking.amount
+                                .mul(block.timestamp - _staking.stakeAt - 30 days)
+                                .div(periodicTime)
+                                .mul(cumulativeAPR)
+                                .div(1000)
+                        );
+                    } else {
+                        _canClaim = _canClaim.add(
+                            _staking.amount
+                                .mul(block.timestamp - _staking.stakeAt)
+                                .div(periodicTime)
+                                .mul(cumulativeAPR)
+                                .mul(2)
+                                .div(1000)
+                        );
+                    }
+             } else {
+                _canClaim = _canClaim.add(
+                    _staking.amount
+                        .mul(block.timestamp - _staking.stakeAt)
+                        .div(periodicTime)
+                        .mul(cumulativeAPR)
+                        .div(1000)
+                );
+            }
         }
 
         return _canClaim;
