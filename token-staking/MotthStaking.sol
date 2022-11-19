@@ -42,7 +42,7 @@ abstract contract IERC20Staking is ReentrancyGuard, Ownable {
     }
 
     function stake(uint256 _stakingId, uint256 _amount) public virtual;
-    function canWithdrawAmount(uint256 _stakingId, address account) public virtual view returns (uint256, uint256);
+    function canWithdrawAmount(uint256 _stakingId, address account) public virtual view returns (uint256);
     function unstake(uint256 _stakingId, uint256 _amount) public virtual;
     function claimableTokens(uint256 _stakingId, address account) public virtual view returns (uint256);
     function claimEarned(uint256 _stakingId) public virtual;
@@ -80,6 +80,7 @@ contract MotthStaking is IERC20Staking {
     uint256 minTokenForReferral = 1;
 
     address[] public NFT2Daddresses = [0xdb68aD71E0d448BB369c7f292A10B535D02F3163];
+    address[] public NFT3Daddresses = [0xd37D7fcB38c0bF8579af43f2899eD5cF2c083EF7];
 
     mapping(address=>uint256) public NFTCashbackPool;
     mapping(uint256=>mapping(uint256=>bool)) public claimedCashbackNFTs;
@@ -93,7 +94,7 @@ contract MotthStaking is IERC20Staking {
 
     uint256 APRBoost2D = 20;
 
-    mapping(address=>uint256[]) claimedDoubleBoosts;
+    mapping(address=>mapping(uint256=>bool)) claimedDoubleBoosts;
 
     uint256 stakingTokenDecimals;
 
@@ -238,15 +239,13 @@ contract MotthStaking is IERC20Staking {
         }
     }
 
-    function canWithdrawAmount(uint256 _stakingId, address account) public override view returns (uint256, uint256) {
-        uint256 _stakedAmount = 0;
+    function canWithdrawAmount(uint256 _stakingId, address account) public override view returns (uint256) {
         uint256 _canWithdraw = 0;
         for (uint256 i = 0; i < stakes[_stakingId][account].length; i++) {
             Staking storage _staking = stakes[_stakingId][account][i];
-            _stakedAmount = _stakedAmount.add(_staking.amount);
             _canWithdraw = _canWithdraw.add(_staking.amount);
         }
-        return (_stakedAmount, _canWithdraw);
+        return _canWithdraw;
     }
 
     function claimableTokens(uint256 _stakingId, address account) public override view returns (uint256) {
@@ -270,11 +269,10 @@ contract MotthStaking is IERC20Staking {
     }
 
     function unstake(uint256 _stakingId, uint256 _amount) public override {
-        uint256 _stakedAmount;
-        uint256 _canWithdraw;
-        Plan storage plan = plans[_stakingId];
+       uint256 _canWithdraw;
+       Plan storage plan = plans[_stakingId];
 
-        (_stakedAmount, _canWithdraw) = canWithdrawAmount(
+        _canWithdraw = canWithdrawAmount(
             _stakingId,
             msg.sender
         );
@@ -287,31 +285,52 @@ contract MotthStaking is IERC20Staking {
         uint256 amount = _amount;
         uint256 _earned = 0;
         uint256 _penalty = 0;
-        uint256 _penaltyAutoburn = 0;
+        bool isDoubleBoost = isDoubleBoostActive(msg.sender);
         
         for (uint256 i = stakes[_stakingId][msg.sender].length; i > 0; i--) {
             Staking storage _staking = stakes[_stakingId][msg.sender][i-1];
             uint256 cumulativeAPR = _staking.apr.add(getBoostedAPR(msg.sender));
+            uint256 _calc = cumulativeAPR.div(periodicTime).div(1000);
+
             if (amount >= _staking.amount) {
-                
-                _earned = _earned.add(
-                    _staking.amount
-                        .mul(block.timestamp - _staking.stakeAt)
-                        .div(periodicTime)
-                        .mul(cumulativeAPR)
-                        .div(1000)
-                );
+
+                if(isDoubleBoost) {
+                    if(_staking.stakeAt - block.timestamp >= 30 days) {
+                        _earned = _earned.add(
+                            _staking.amount
+                                .mul(30 days)
+                                .mul(2)
+                                .mul(_calc)
+                        );
+
+                        _earned = _earned.add(
+                            _staking.amount
+                                .mul(block.timestamp - _staking.stakeAt - 30 days)
+                                .mul(_calc)
+                        );
+                    } else {
+
+                        _earned = _earned.add(
+                            _staking.amount
+                                .mul(block.timestamp - _staking.stakeAt)
+                                .mul(2)
+                                .mul(_calc)
+                        );
+
+                    }
+
+                } else {
+                    _earned = _earned.add(
+                        _staking.amount
+                            .mul(block.timestamp - _staking.stakeAt)
+                            .mul(_calc)
+                    );
+                }
 
                 if (block.timestamp < _staking.endstakeAt) {
                     _penalty = _penalty.add(
                         _staking.amount
                         .mul(plan.earlyPenalty)
-                        .div(1000)
-                    );
-
-                    _penaltyAutoburn = _penaltyAutoburn.add(
-                        _staking.amount
-                        .mul(plan.earlyPenaltyAutoBurn)
                         .div(1000)
                     );
                 }
@@ -320,13 +339,41 @@ contract MotthStaking is IERC20Staking {
                 _staking.amount = 0;
             } else {
 
-                _earned = _earned.add(
-                    amount
-                        .mul(block.timestamp - _staking.stakeAt)
-                        .div(periodicTime)
-                        .mul(cumulativeAPR)
-                        .div(1000)
-                );
+                if(isDoubleBoost) {
+                    if(_staking.stakeAt - block.timestamp >= 30 days) { //Double Boost
+
+                        _earned = _earned.add(
+                            amount
+                                .mul(30 days)
+                                .mul(_calc)
+                                .mul(2) 
+                        );
+
+                        _earned = _earned.add(
+                            amount
+                                .mul(block.timestamp - _staking.stakeAt - 30 days)
+                                .mul(_calc)
+                        );
+
+                    } else {
+
+                        _earned = _earned.add(
+                            amount
+                                .mul(block.timestamp - _staking.stakeAt)
+                                .mul(_calc)
+                                .mul(2) 
+                        );
+
+                    }
+
+                } else {
+
+                    _earned = _earned.add(
+                        amount
+                            .mul(block.timestamp - _staking.stakeAt)
+                            .mul(_calc)
+                    );
+                }
                 
                 if (block.timestamp < _staking.endstakeAt) {
                     
@@ -336,11 +383,6 @@ contract MotthStaking is IERC20Staking {
                         .div(1000)
                     );
 
-                    _penaltyAutoburn = _penaltyAutoburn.add(
-                        _staking.amount
-                        .mul(plan.earlyPenaltyAutoBurn)
-                        .div(1000)
-                    );
                 }
 
                 _staking.amount = _staking.amount.sub(amount);
@@ -362,11 +404,15 @@ contract MotthStaking is IERC20Staking {
             IERC20(stakingToken).transfer(msg.sender, tamount - _penalty + _earned);
         }
 
-        if(_penaltyAutoburn > 0) {
-            IERC20(stakingToken).transfer(DEAD, _penaltyAutoburn);
+        if(_penalty > 0) {
+            IERC20(stakingToken).transfer(DEAD, _penalty.mul(plan.earlyPenaltyAutoBurn).div(plan.earlyPenalty));
         }
 
         plans[_stakingId].overallStaked = plans[_stakingId].overallStaked.sub(_amount);
+
+        if(isDoubleBoost) {
+            claimDoubleBoost(msg.sender);
+        }
     }
 
     function claimEarned(uint256 _stakingId) public override {
@@ -448,6 +494,31 @@ contract MotthStaking is IERC20Staking {
 
     function getBoostedAPR(address _account) public view returns(uint256) {
         return getTotal2DNFT(_account).mul(APRBoost2D);
+    }
+
+    function isDoubleBoostActive(address _account) public view returns(bool) {
+
+        for(uint256 i = 0; i < NFT3Daddresses.length;i++) {
+            uint256[] memory tokenIds = NFT(NFT3Daddresses[i]).walletOfOwner(_account);
+            for(uint256 j = 0; j < tokenIds.length; j++) {
+                if(!claimedDoubleBoosts[NFT3Daddresses[i]][tokenIds[j]]) {
+                    return true;
+                }
+            }
+        }
+
+        return true;
+    }
+
+    function claimDoubleBoost(address _account) private {
+        for(uint256 i = 0; i < NFT3Daddresses.length; i++) {
+            uint256[] memory tokenIds = NFT(NFT3Daddresses[i]).walletOfOwner(_account);
+            for(uint256 j = 0; j < tokenIds.length; j++) {
+                if(!claimedDoubleBoosts[NFT3Daddresses[i]][tokenIds[j]]) {
+                    claimedDoubleBoosts[NFT3Daddresses[i]][tokenIds[j]] = true;
+                }
+            }
+        }
     }
 
     function getTotalStakedAmount(address _account) public view returns(uint256){
@@ -558,6 +629,10 @@ contract MotthStaking is IERC20Staking {
         NFT2Daddresses = _nft2DAddresses;
     }
 
+    function setNFT3DAddresses(address[] memory _nft3DAddresses) external onlyOwner  {
+        NFT3Daddresses = _nft3DAddresses;
+    }
+
     function setPlanAPRReductionThreshold(uint256 _planAPRReductionThreshold) external onlyOwner {
         planAPRReductionThreshold = _planAPRReductionThreshold;
     }
@@ -569,9 +644,11 @@ contract MotthStaking is IERC20Staking {
     function setAPRBoost2D(uint256 _APRBoost2D) external onlyOwner {
         APRBoost2D = _APRBoost2D;
     }
- 
-    function isDoubleBoostActive() public pure returns(bool) {
-        return true;
+
+    function setClaimedDoubleBoosts(address _nft3DAddress, uint256 tokenId, bool enable) external onlyOwner {
+        if(claimedDoubleBoosts[_nft3DAddress][tokenId] != enable) {
+            claimedDoubleBoosts[_nft3DAddress][tokenId] = enable;
+        }
     }
 
 }
